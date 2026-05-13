@@ -1,0 +1,55 @@
+name: Build & Publish to release/local
+
+# Builds the package and force-pushes the compiled artifacts to the
+# `release/local` branch so consumers can run it directly via:
+#   npx -y github:<your-fork>/mcp-testrail#release/local
+#
+# This is a fork-local workflow (NOT intended for upstream PR).
+
+on:
+  push:
+    branches:
+      - "fix/**"
+      - "local/**"
+  workflow_dispatch:
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish dist to release/local
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Create a clean orphan branch containing only the runtime artifacts.
+          # Workflows are intentionally excluded so pushing here does NOT
+          # trigger any further CI loops.
+          git checkout --orphan tmp-release
+          git rm -rf --cached . > /dev/null
+
+          # Force-include dist (gitignored normally) plus essential metadata
+          git add -f dist/ package.json package-lock.json README.md LICENSE
+
+          SHORT_SHA="${GITHUB_SHA::7}"
+          git commit -m "build: artifacts from ${SHORT_SHA} (${GITHUB_REF_NAME})"
+
+          # Replace release/local entirely with the new build
+          git push -f origin tmp-release:release/local
