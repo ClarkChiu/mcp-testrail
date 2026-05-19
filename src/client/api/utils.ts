@@ -70,10 +70,39 @@ export function normalizeListResponse<K extends string, T>(
 }
 
 /**
- * Handles API errors with better context
+ * Extracts a server-side error message from a TestRail API response body.
+ * TestRail returns `{ "error": "..." }` for client-side failures; this helper
+ * surfaces that string so callers see the real reason instead of the generic
+ * axios "Request failed with status code 400".
+ */
+function extractServerErrorMessage(data: unknown): string | undefined {
+	if (data && typeof data === "object" && "error" in data) {
+		const e = (data as { error: unknown }).error;
+		if (typeof e === "string" && e.trim().length > 0) {
+			return e.trim();
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Handles API errors with better context.
+ *
+ * For axios errors carrying a response body (e.g. TestRail's
+ * `{ "error": "Field :case_id is not a valid test case." }`), the returned
+ * Error's `message` is rewritten to `HTTP <status>: <server reason>` so the
+ * actual cause is visible to MCP tool consumers — not just `"Request failed
+ * with status code 400"`.
+ *
+ * For axios errors without a parseable response body, the message is
+ * `HTTP <status>` (no server reason available).
+ *
+ * Non-axios errors are returned unchanged, except plain non-Error throwables
+ * which are wrapped into `Error(${message}: ${value})`.
+ *
  * @param error The error object from catch
- * @param message Optional context message
- * @returns Enhanced error with better context
+ * @param message Context message prefix for logging
+ * @returns Error with an enriched, caller-friendly message
  */
 export function handleApiError(error: unknown, message: string): Error {
 	// If it's an Axios error, we can get more context
@@ -85,6 +114,14 @@ export function handleApiError(error: unknown, message: string): Error {
 			console.error(
 				`${message}: ${JSON.stringify({ response: { status, data: responseData } })}`,
 			);
+			const serverReason = extractServerErrorMessage(responseData);
+			const enrichedMessage = serverReason
+				? `HTTP ${status}: ${serverReason}`
+				: `HTTP ${status}`;
+			// Mutate `message` in-place so existing instanceof checks and any
+			// downstream handlers that re-throw the same Error see the new
+			// context.
+			(error as Error).message = enrichedMessage;
 		} else {
 			console.error(`${message}: ${error}`);
 		}
